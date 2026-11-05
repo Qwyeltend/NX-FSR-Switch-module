@@ -1,0 +1,47 @@
+FRAG
+DCL IN[0].xy, GENERIC[1], PERSPECTIVE
+DCL OUT[0], COLOR
+DCL SAMP[0]
+DCL SVIEW[0], 2D, FLOAT
+DCL CONST[1][0..1]
+DCL TEMP[0..27], LOCAL
+IMM[0] UINT32 {0, 24, 28, 0}
+IMM[1] INT32 {0, -1, 0, 0}
+IMM[2] FLT32 {0x3f800000, 0x3e59b3d0, 0x3f371759, 0x3d93dd98}
+IMM[3] FLT32 {0x40000000, 0x40400000, 0x3f000000, 0x00000000}
+IMM[4] FLT32 {0xc0200000, 0x00000000, 0x00000000, 0x00000000}
+  0: F2I TEMP[0].xy, IN[0].xyyy
+  1: INEG TEMP[1].xy, CONST[1][1].zwww
+  2: UADD TEMP[2].xy, TEMP[0].xyyy, TEMP[1].xyyy
+  3: IMAX TEMP[3].xy, TEMP[2].xyyy, IMM[1].xxxx
+  4: TXQ TEMP[4].xy, IMM[1].xxxx, SAMP[0], 2D
+  5: UADD TEMP[5].xy, TEMP[4].xyyy, IMM[1].yyyy
+  6: IMIN TEMP[6].xy, TEMP[3].xyyy, TEMP[5].xyyy
+  7: MOV TEMP[7].xy, TEMP[6].xyyy
+  8: TXF_LZ TEMP[8].xyz, TEMP[7], SAMP[0], 2D
+  9: ADD TEMP[9].xyz, IMM[2].xxxx, -TEMP[8].xyzz
+ 10: DP3 TEMP[10].x, TEMP[8].xyzz, IMM[2].yzww
+ 11: DP3 TEMP[11].x, TEMP[9].xyzz, IMM[2].yzww
+ 12: ADD TEMP[12].x, TEMP[11].xxxx, -TEMP[10].xxxx
+ 13: MOV TEMP[13].x, |TEMP[12].xxxx|
+ 14: MUL TEMP[14].x, TEMP[13].xxxx, IMM[3].xxxx
+ 15: MOV_SAT TEMP[15].x, TEMP[14].xxxx
+ 16: MUL TEMP[16].x, TEMP[15].xxxx, TEMP[15].xxxx
+ 17: MUL TEMP[17].x, IMM[3].xxxx, TEMP[15].xxxx
+ 18: ADD TEMP[18].x, IMM[3].yyyy, -TEMP[17].xxxx
+ 19: MUL TEMP[19].x, TEMP[16].xxxx, TEMP[18].xxxx
+ 20: FSLT TEMP[20].x, IMM[3].zzzz, TEMP[10].xxxx
+ 21: UIF TEMP[20].xxxx
+ 22:   MOV TEMP[21].x, IMM[3].wwww
+ 23: ELSE
+ 24:   MOV TEMP[21].x, IMM[2].xxxx
+ 25: ENDIF
+ 26: MOV TEMP[22].w, IMM[2].xxxx
+ 27: LRP TEMP[23].xyz, TEMP[19].xxxx, TEMP[9].xyzz, TEMP[21].xxxx
+ 28: ADD TEMP[24].x, CONST[1][0].xxxx, IMM[4].xxxx
+ 29: MUL TEMP[25].x, TEMP[24].xxxx, IMM[3].xxxx
+ 30: MOV_SAT TEMP[26].x, TEMP[25].xxxx
+ 31: ADD TEMP[27].x, IMM[2].xxxx, -TEMP[26].xxxx
+ 32: LRP TEMP[22].xyz, TEMP[27].xxxx, TEMP[23].xyzz, TEMP[8].xyzz
+ 33: MOV OUT[0], TEMP[22]
+ 34: END
