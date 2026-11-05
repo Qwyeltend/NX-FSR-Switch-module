@@ -1,59 +1,116 @@
-# fsrSwitch
+# NX-FSR
 
-Улучшение картинки в играх на прошитом Nintendo Switch 1: **резкость** (против «мыла»)
-и **сглаживание** (против «лесенок»), с отдельными настройками для каждой игры
-через оверлей Ultrahand.
+Per-game post-processing for retail Nintendo Switch games: **contrast adaptive sharpening** now,
+**anti-aliasing** and **FSR 1.0** planned. Runs on the console itself, on the game's final frame,
+without extra frame buffering.
 
-## Требования
+> [!WARNING]
+> **Experimental.** This is an early diagnostic build, not tested on many games yet.
+> It may crash games. Keep a backup of your `SaltySD` folder.
 
-Пользователь не технарь: «включил, один раз настроил и забыл».
+## Features
 
-- Две проблемы: **мыло** (нужна резкость) и **лесенки** (нужно сглаживание).
-  Эффекты включаются по отдельности или вместе.
-- **Без инпут-лага:** эффект встраивается в тот же кадр, без лишней буферизации.
-  Цена эффекта: несколько миллисекунд работы видеочипа, но не лишний кадр задержки.
-- **Настройки для каждой игры:** сохраняются автоматически и применяются при запуске игры.
-- Оверлей простой: готовые режимы («Резкость», «Сглаживание», «Оба»), ползунки
-  в разделе «Подробнее» и быстрое сравнение «с эффектом / без».
+- AMD FidelityFX CAS sharpening of the final frame
+- Settings per game (title ID), applied automatically when the game starts
+- No added input lag: the pass runs inside the same frame, right before present (it only costs GPU time)
+- Split view for comparing (effect on the left half only)
+- One build for all 64-bit NVN games, no per-game code
 
-## Обработка кадра
+### Planned
 
-Порядок: сначала **сглаживание** (FXAA или SMAA), потом **резкость** (RCAS/CAS).
-Сглаживание немного смягчает картинку, а резкость после него возвращает детали.
+- Post-process anti-aliasing (FXAA, SMAA) and combining it with sharpening
+- Ultrahand / Tesla overlay for changing settings in game
+- Optional per-game FSR 1.0 (EASU + RCAS) where the frame can be taken before the game's own upscale
 
-Ограничение: эффект применяется к финальному кадру, который игра уже растянула
-и на который уже наложила интерфейс. Поэтому сглаживание слабее, чем встроенное
-в игру, а интерфейс тоже обрабатывается (текст может слегка поменяться).
+## Requirements
 
-## Как это устроено
+- Switch with Atmosphère custom firmware
+- [SaltyNX](https://github.com/masagrator/SaltyNX) 2.1.4 (included in the release package)
 
-1. **Плагин в игре (основа).** Работает внутри процесса игры через SaltyNX.
-   SaltyNX уже перехватывает функции графического API NVN, которыми игра отдаёт
-   кадр на экран (`nvnQueuePresentTexture`, `nvnWindowBuilderSetTextures`), и умеет
-   подменять текстуры окна своими. Мы используем это так: игра рисует кадр в нашу
-   текстуру, мы прогоняем её через шейдеры и выводим результат на экран.
-2. **Оверлей для Ultrahand (пульт).** Только настройка. Настройки лежат в
-   `sdmc:/config/fsrSwitch/<titleid>.ini`, плагин читает их сам при запуске игры.
+### Limitations
 
-## Этапы
+- 64-bit games only (SaltyNX limitation)
+- Games rendering through NVN only (not OpenGL / Vulkan)
+- The effect is applied after the game composes its UI, so the UI is processed too
+- About 10 MB of memory is reserved at game start for the frame copy
 
-- [ ] 0. Сборка через GitHub Actions (образ devkitPro), потому что локально
-      серверы devkitPro закрыты.
-- [ ] 1. Проверить главный неизвестный пункт: собрать шейдер в формате,
-      который понимает NVN, и выполнить его внутри игры (с подробным логом).
-- [ ] 2. Минимальная версия: резкость (RCAS/CAS) финального кадра в одной тестовой игре.
-- [ ] 3. Сглаживание: сначала FXAA (дешёвое), затем SMAA (качественнее, меньше мылит);
-      совмещение с резкостью.
-- [ ] 4. Оверлей Ultrahand: режимы, ползунки, сравнение с эффектом и без,
-      настройки для каждой игры с автоприменением.
-- [ ] 5. Замер стоимости эффектов в мс на кадр; рекомендации по разгону (sys-clk).
-- [ ] 6. (По желанию) Полный FSR 1.0 (EASU + RCAS) для отдельных игр, где удастся
-      перехватить кадр до встроенного растягивания.
+## How it works
 
-FSR 2.0 не планируется: ему нужны векторы движения и буфер глубины от самой игры.
+The effect is built into SaltyNX Core next to its logo renderer. SaltyNX already hooks NVN
+(`nvnQueuePresentTexture`), so right before a frame is presented:
 
-## Справка
+1. the game's queue is fenced and a separate NVN queue waits for it,
+2. the frame is copied into a texture of ours (sharpening reads neighbouring pixels),
+3. a full screen triangle with the sharpening shader is drawn back into the frame,
+4. the game's queue waits for our queue and presents.
 
-- SaltyNX: https://github.com/masagrator/SaltyNX (хуки NVN: `saltysd_core/source/api/NVN.cpp`)
-- FPSLocker: https://github.com/masagrator/FPSLocker (пример оверлея поверх SaltyNX)
-- Ultrahand: https://github.com/ppkantorski/Ultrahand-Overlay
+### Shaders without the official SDK
+
+NVN shaders normally come from Nintendo's offline compiler. Here they are compiled with
+[UAM](https://github.com/devkitPro/uam) (the open deko3d shader compiler) and converted to NVN's
+format by `tools/dksh2nvn.py`.
+
+The layout was worked out in `lab/` by compiling SaltyNX's logo shader with UAM and comparing it with
+the NVN binary of the same GLSL: the code section matches (0x30 byte prefix, shader program header,
+instructions, constant buffer aligned to 256 bytes) and the NVN control section carries the same
+fields as deko3d's program header. Only two bindings differ:
+
+| | UAM / deko3d | NVN |
+|---|---|---|
+| uniform block, binding 0 | `c2` | `c3` |
+| fragment texture, binding 0 | handle `0x1A4` | handle `0x8` |
+
+The build patches UAM for the texture slot, declares uniform blocks at binding 1 (= NVN binding 0),
+and `tools/check_nvn_asm.py` disassembles every shader with envydis and fails the build if it uses
+anything else.
+
+## Installation
+
+1. Back up the `SaltySD` folder on your SD card.
+2. Download the latest package and copy its contents to the root of the SD card.
+3. Reboot.
+
+## Configuration
+
+Per-game settings live in `sdmc:/config/fsrSwitch/<TITLEID>.ini` (created with defaults on the
+first launch of a game):
+
+```ini
+enabled=1        # 0 = off for this game
+sharpness=0.50   # 0.0 (soft) .. 1.0 (strong)
+split=1          # 1 = left half only (comparison), 0 = whole screen
+```
+
+Changes apply on the next launch of the game.
+To turn the effect off for all games, create an empty `sdmc:/config/fsrSwitch/disabled.flag`.
+
+A log is written per game to `sdmc:/config/fsrSwitch/log_<TITLEID>.txt` (initialisation steps,
+frame size and format, GPU time of the pass).
+
+## Building
+
+Everything is built by GitHub Actions (`.github/workflows/build.yml`):
+
+1. **shaders** — builds UAM and envydis, compiles `shaders/`, converts to NVN, checks bindings
+2. **core** — SaltyNX 2.1.4 Core with the module applied by `tools/apply_patch.py` (devkitA64)
+3. **package** — the official SaltyNX 2.1.4 release with the Core replaced
+
+```
+shaders/        GLSL sources (full screen vertex shader, CAS fragment shader)
+core/           FsrNVN module (added to SaltyNX Core)
+tools/          UAM -> NVN converter, binding checker, SaltyNX patcher
+lab/            research: UAM vs NVN shader comparison
+package/        files added to the release package
+```
+
+## Credits
+
+- [masagrator](https://github.com/masagrator) — SaltyNX, whose NVN hooks and logo renderer this builds on
+- [fincs / devkitPro](https://github.com/devkitPro/uam) — UAM shader compiler
+- [envytools](https://github.com/envytools/envytools) — envydis Maxwell disassembler
+- AMD — FidelityFX Contrast Adaptive Sharpening (MIT)
+
+## Disclaimer
+
+Not affiliated with Nintendo, NVIDIA or AMD. Code injection into games can get you banned
+from online services: don't use it in online games.

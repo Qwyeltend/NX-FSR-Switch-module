@@ -1,34 +1,33 @@
-fsrSwitch — диагностическая сборка (резкость CAS, режим сравнения)
-=================================================================
+NX-FSR - diagnostic build (CAS sharpening, comparison mode)
+==========================================================
 
-Это официальный SaltyNX 2.1.4, в котором заменён один файл: SaltySD/saltynx_core.elf
-(в него встроен fsrSwitch). Остальные файлы — оригинальные из релиза SaltyNX 2.1.4.
+This package is the official SaltyNX 2.1.4 release with one file replaced:
+SaltySD/saltynx_core.elf (SaltyNX Core with NX-FSR built in).
 
-УСТАНОВКА
-1. Сделай копию папки SaltySD с карты памяти (на всякий случай).
-2. Скопируй содержимое архива в корень карты памяти с заменой файлов.
-3. Перезагрузи Switch.
+INSTALL
+1. Back up the SaltySD folder on your SD card.
+2. Copy the contents of this package to the root of the SD card, replacing files.
+3. Reboot.
 
-ЧТО ДОЛЖНО ПРОИЗОЙТИ
-В игре левая половина экрана станет резче, правая останется как была,
-между ними — тонкая жёлтая вертикальная линия.
+WHAT YOU SHOULD SEE
+In game, the left half of the screen is sharpened, the right half is unchanged,
+with a thin yellow vertical line between them.
 
-НАСТРОЙКИ (для каждой игры свои)
-После первого запуска игры появится файл:
-  sdmc:/config/fsrSwitch/<ID игры>.ini
-  enabled=1      (0 — выключить для этой игры)
-  sharpness=0.50 (0.0 мягко ... 1.0 сильно)
-  split=1        (1 — только левая половина, 0 — весь экран)
-Изменения применяются при следующем запуске игры.
+SETTINGS (per game)
+Created on the first launch of a game:
+  sdmc:/config/fsrSwitch/<TITLEID>.ini
+  enabled=1       (0 = off for this game)
+  sharpness=0.50  (0.0 soft ... 1.0 strong)
+  split=1         (1 = left half only, 0 = whole screen)
+Changes apply on the next launch of the game.
 
-ВЫКЛЮЧИТЬ ВСЁ СРАЗУ
-Создай пустой файл sdmc:/config/fsrSwitch/disabled.flag
+TURN EVERYTHING OFF
+Create an empty file: sdmc:/config/fsrSwitch/disabled.flag
 
-ЛОГИ (их нужно прислать)
-  sdmc:/config/fsrSwitch/log_<ID игры>.txt
-  sdmc:/config/fsrSwitch/<ID игры>.ini
+LOGS
+  sdmc:/config/fsrSwitch/log_<TITLEID>.txt
+  sdmc:/SaltySD/saltynx_core.log
 
-ЕСЛИ ЧТО-ТО ПОШЛО НЕ ТАК
-- Игра не запускается или вылетает: создай disabled.flag (см. выше), запусти игру
-  ещё раз и пришли логи.
-- Вернуть всё как было: верни сохранённую копию папки SaltySD.
+IF SOMETHING GOES WRONG
+- Game doesn't start or crashes: create disabled.flag and launch the game again.
+- To restore everything: put back your SaltySD backup.
