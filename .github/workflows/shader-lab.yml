@@ -1,0 +1,79 @@
+name: shader-lab
+
+# Research job: builds the open UAM shader compiler and the envydis disassembler, compiles
+# SaltyNX's logo shaders with UAM and compares them with SaltyNX's NVN binaries.
+# Results are pushed to the "lab-results" branch.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "lab/**"
+      - ".github/workflows/shader-lab.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  lab:
+    runs-on: ubuntu-22.04   # uam's meson.build needs distutils (Python <= 3.11)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q meson ninja-build flex bison python3-mako cmake libxml2-dev pkg-config
+
+      - name: Build UAM
+        run: |
+          git clone --depth 1 https://github.com/devkitPro/uam.git /tmp/uam
+          cd /tmp/uam && meson setup build && ninja -C build
+          ls -la build
+
+      - name: Build envydis
+        run: |
+          git clone --depth 1 https://github.com/envytools/envytools.git /tmp/envytools
+          cd /tmp/envytools && mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release > /dev/null
+          make -j4 envydis 2>&1 | tail -3
+          find . -name envydis -type f
+
+      - name: Get SaltyNX shaders
+        run: git clone --depth 1 https://github.com/masagrator/SaltyNX.git /tmp/saltynx
+
+      - name: Compile with UAM and compare
+        run: |
+          set -x
+          OUT=$GITHUB_WORKSPACE/out
+          mkdir -p $OUT/uam
+          UAM=/tmp/uam/build/uam
+          ENVYDIS=$(find /tmp/envytools/build -name envydis -type f | head -1)
+          L=/tmp/saltynx/saltysd_core/logo
+          $UAM -s vert -o $OUT/uam/vert.dksh -t $OUT/uam/vert.tgsi $L/saltynx.vert > $OUT/uam/vert.log 2>&1 || true
+          $UAM -s frag -o $OUT/uam/frag.dksh -t $OUT/uam/frag.tgsi $L/saltynx.frag > $OUT/uam/frag.log 2>&1 || true
+          for f in lab/shaders/*.frag; do
+            [ -e "$f" ] || continue
+            n=$(basename $f .frag)
+            $UAM -s frag -o $OUT/uam/$n.dksh $f > $OUT/uam/$n.log 2>&1 || true
+          done
+          python3 lab/compare.py $L $OUT/uam $OUT
+          for s in vert frag; do
+            for k in nvn uam; do
+              if [ -f $OUT/$s.$k.words ]; then
+                $ENVYDIS -m gm107 -w < $OUT/$s.$k.words > $OUT/$s.$k.asm 2>&1 || true
+              fi
+            done
+          done
+          ls -la $OUT $OUT/uam
+
+      - name: Push results to lab-results branch
+        run: |
+          cd $GITHUB_WORKSPACE/out
+          git init -q
+          git config user.name "shader-lab"
+          git config user.email "shader-lab@users.noreply.github.com"
+          git checkout -q -b lab-results
+          git add -A
+          git commit -q -m "lab results for ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" lab-results
