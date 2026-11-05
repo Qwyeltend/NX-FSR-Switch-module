@@ -126,9 +126,9 @@ jobs:
         run: |
           set -e
           gh release view "$SALTYNX_TAG" -R masagrator/SaltyNX --json assets --jq '.assets[].name'
-          gh release download "$SALTYNX_TAG" -R masagrator/SaltyNX -p 'SaltyNX*.zip' -D /tmp/rel
+          gh release download "$SALTYNX_TAG" -R masagrator/SaltyNX -p 'SaltyNX.zip' -D /tmp/rel
           mkdir -p /tmp/sd && cd /tmp/sd
-          unzip -q /tmp/rel/*.zip
+          unzip -q /tmp/rel/SaltyNX.zip
           find . -maxdepth 3 | sort
           test -f SaltySD/saltynx_core.elf
           cp /tmp/core/saltynx_core.elf SaltySD/saltynx_core.elf
