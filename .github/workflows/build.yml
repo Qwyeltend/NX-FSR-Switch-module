@@ -1,0 +1,157 @@
+name: build
+
+# 1. shaders: GLSL -> UAM (open deko3d compiler, patched for NVN texture slots) -> NVN code/control sections,
+#    then disassembled and checked for bindings NVN wouldn't understand.
+# 2. core: SaltyNX 2.1.4 Core with fsrSwitch built in (devkitA64).
+# 3. package: official SaltyNX 2.1.4 release with our Core swapped in, zip pushed to the "builds" branch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "shaders/**"
+      - "core/**"
+      - "tools/**"
+      - "package/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: write
+
+env:
+  SALTYNX_TAG: "2.1.4"
+
+jobs:
+  shaders:
+    runs-on: ubuntu-22.04   # uam's meson.build needs distutils (Python <= 3.11)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q meson ninja-build flex bison python3-mako cmake libxml2-dev pkg-config
+
+      - name: Build UAM (texture handles at NVN's slot for fragment shaders)
+        run: |
+          git clone --depth 1 https://github.com/devkitPro/uam.git /tmp/uam
+          cd /tmp/uam
+          # NVN fragment texture binding 0 = handle index 0x8 (deko3d: 0x1A4), see lab/.
+          sed -i 's|m_info.io.texBindBase    = resbase+0x000;|m_info.io.texBindBase    = (m_stage == pipeline_stage_fragment ? 0x020 : resbase+0x000);|' source/compiler_iface.cpp
+          grep -n "texBindBase    =" source/compiler_iface.cpp
+          grep -q "pipeline_stage_fragment ? 0x020" source/compiler_iface.cpp
+          meson setup build && ninja -C build
+
+      - name: Build envydis
+        run: |
+          git clone --depth 1 https://github.com/envytools/envytools.git /tmp/envytools
+          cd /tmp/envytools && mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release > /dev/null
+          make -j4 envydis 2>&1 | tail -2
+
+      - name: Get NVN control templates (SaltyNX)
+        run: git clone --depth 1 --branch "$SALTYNX_TAG" https://github.com/masagrator/SaltyNX.git /tmp/saltynx
+
+      - name: Compile, convert, check
+        run: |
+          set -e
+          UAM=/tmp/uam/build/uam
+          ENVYDIS=$(find /tmp/envytools/build -name envydis -type f | head -1)
+          T=/tmp/saltynx/saltysd_core/logo
+          mkdir -p out/fsr out/check
+          $UAM -s vert -o out/check/vert.dksh shaders/fsr.vert
+          $UAM -s frag -o out/check/frag.dksh shaders/cas.frag
+          python3 tools/dksh2nvn.py out/check/vert.dksh $T/vert.control.bin out/fsr/vert.code.bin out/fsr/vert.control.bin
+          python3 tools/dksh2nvn.py out/check/frag.dksh $T/frag.control.bin out/fsr/frag.code.bin out/fsr/frag.control.bin
+          $ENVYDIS -m gm107 -w < out/fsr/vert.code.bin.words > out/check/vert.asm
+          $ENVYDIS -m gm107 -w < out/fsr/frag.code.bin.words > out/check/frag.asm
+          python3 tools/check_nvn_asm.py vert out/check/vert.asm
+          python3 tools/check_nvn_asm.py frag out/check/frag.asm
+          rm out/fsr/*.words
+          ls -la out/fsr
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fsr-shaders
+          path: out/fsr
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shader-check
+          path: out/check
+
+  core:
+    needs: shaders
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get SaltyNX
+        run: git clone --depth 1 --branch "$SALTYNX_TAG" https://github.com/masagrator/SaltyNX.git /tmp/saltynx
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: fsr-shaders
+          path: /tmp/saltynx/saltysd_core/fsr
+
+      - name: Apply fsrSwitch and build Core
+        run: |
+          which python3 || (apt-get update -q && apt-get install -y -q python3)
+          python3 tools/apply_patch.py /tmp/saltynx .
+          cd /tmp/saltynx/saltysd_core
+          make -f Makefile.64.mk -j4
+          ls -la saltynx_core.elf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltynx-core
+          path: /tmp/saltynx/saltysd_core/saltynx_core.elf
+
+  package:
+    needs: core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: saltynx-core
+          path: /tmp/core
+
+      - name: Official SaltyNX release + our Core
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          gh release view "$SALTYNX_TAG" -R masagrator/SaltyNX --json assets --jq '.assets[].name'
+          gh release download "$SALTYNX_TAG" -R masagrator/SaltyNX -p 'SaltyNX*.zip' -D /tmp/rel
+          mkdir -p /tmp/sd && cd /tmp/sd
+          unzip -q /tmp/rel/*.zip
+          find . -maxdepth 3 | sort
+          test -f SaltySD/saltynx_core.elf
+          cp /tmp/core/saltynx_core.elf SaltySD/saltynx_core.elf
+          mkdir -p config/fsrSwitch
+          cp $GITHUB_WORKSPACE/package/README_TEST.txt ./README_fsrSwitch.txt
+          SHORT=$(echo $GITHUB_SHA | cut -c1-7)
+          NAME=fsrSwitch-diag-$SHORT
+          zip -q -r /tmp/$NAME.zip .
+          mkdir -p /tmp/builds && cp /tmp/$NAME.zip /tmp/builds/
+          echo "NAME=$NAME" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: /tmp/builds
+
+      - name: Push zip to builds branch
+        run: |
+          cd /tmp/builds
+          git init -q
+          git config user.name "fsrSwitch-ci"
+          git config user.email "fsrSwitch-ci@users.noreply.github.com"
+          git checkout -q -b builds
+          git add -A
+          git commit -q -m "build ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" builds
