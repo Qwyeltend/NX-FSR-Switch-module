@@ -128,6 +128,10 @@ package/        files added to the release package
 - [envytools](https://github.com/envytools/envytools) — envydis Maxwell disassembler
 - AMD — FidelityFX Contrast Adaptive Sharpening (MIT)
 
+## License
+
+GPLv2, see [LICENSE](LICENSE). The overlay uses libtesla (GPLv2). The shader is based on AMD FidelityFX CAS (MIT).
+
 ## Disclaimer
 
 Not affiliated with Nintendo, NVIDIA or AMD. Code injection into games can get you banned
