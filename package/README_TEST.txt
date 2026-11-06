@@ -1,4 +1,4 @@
-NX-FSR 0.2.0
+NX-FSR 0.3.0
 ============
 
 This package is the official SaltyNX 2.1.4 release with SaltyNX Core replaced
@@ -13,10 +13,13 @@ INSTALL
 USE
 Start a game, open the overlay menu (Tesla / Ultrahand) and choose NX-FSR:
   Effect          on / off for this game
-  Sharpness       0 - 100 %
+  Sharpness       0 - 100 % (0 = off)
+  Anti-aliasing   0 - 100 % (0 = off)
   Compare         effect on the left half only, line in the middle
   Picture flip    Auto / Off / On (if the picture is upside down)
 Changes apply immediately and are saved for this game.
+Everything is off by default. The first time you turn the effect on for a game,
+restart the game once (memory for it is reserved at game start).
 
 TURN EVERYTHING OFF
 Create an empty file: sdmc:/config/fsrSwitch/disabled.flag

@@ -10,7 +10,7 @@
 
 layout(std140, binding = 1) uniform Params {
     vec4 uCrop;     // x, y, width, height of the visible area (texels)
-    vec4 uEffect;   // sharpness 0..1, split (1 = only left half), flip rows (0/1), unused
+    vec4 uEffect;   // sharpness 0..1, split (1 = only left half), flip rows (0/1), anti-aliasing 0..1
 };
 
 layout(location = 0) out vec2 vFbCoord;

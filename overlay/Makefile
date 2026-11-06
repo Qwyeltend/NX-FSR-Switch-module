@@ -21,7 +21,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 # NO_NACP: if set to anything, no .nacp file is generated.
 # APP_TITLE	:=	NX-FSR
 APP_AUTHOR	:=	NX-FSR contributors
-APP_VERSION	:=	0.2.0
+APP_VERSION	:=	0.3.0
 
 # libtesla and FPSLocker's IPC helpers (ipc.h) come from a FPSLocker checkout (see build workflow).
 FPSLOCKER	?=	/tmp/fpslocker

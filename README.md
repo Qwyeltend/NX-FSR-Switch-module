@@ -1,7 +1,7 @@
 # NX-FSR
 
-Per-game post-processing for retail Nintendo Switch games: **contrast adaptive sharpening** now,
-**anti-aliasing** and **FSR 1.0** planned. Runs on the console itself, on the game's final frame,
+Per-game post-processing for retail Nintendo Switch games: **contrast adaptive sharpening** and
+**anti-aliasing (FXAA)**, FSR 1.0 planned. Runs on the console itself, on the game's final frame,
 without extra frame buffering.
 
 > [!WARNING]
@@ -10,7 +10,9 @@ without extra frame buffering.
 
 ## Features
 
-- AMD FidelityFX CAS sharpening of the final frame
+- AMD FidelityFX CAS sharpening and FXAA anti-aliasing of the final frame, separately or together,
+  in one pass (anti-aliasing on edges, sharpening elsewhere)
+- Off by default: games that were never set up are not touched at all
 - Settings per game (title ID), applied automatically when the game starts
 - Tesla / Ultrahand overlay: change settings in game, live, saved per game
 - Handles games whose frame is stored bottom-up (NVN lower-left origin), with a manual override
@@ -20,7 +22,7 @@ without extra frame buffering.
 
 ### Planned
 
-- Post-process anti-aliasing (FXAA, SMAA) and combining it with sharpening
+- Higher quality anti-aliasing (SMAA) for games with enough free memory
 - Optional per-game FSR 1.0 (EASU + RCAS) where the frame can be taken before the game's own upscale
 
 ## Requirements
@@ -78,7 +80,8 @@ Open the overlay (Tesla / Ultrahand) while a game is running:
 | Setting | |
 |---|---|
 | Effect | on / off for this game |
-| Sharpness | 0 – 100 % |
+| Sharpness | 0 – 100 %, 0 = off |
+| Anti-aliasing | 0 – 100 %, 0 = off |
 | Compare | effect on the left half only, line in the middle |
 | Picture flip | Auto / Off / On, for games where the picture ends up upside down |
 
@@ -87,13 +90,15 @@ at the next start of that game. The file can also be edited by hand:
 
 ```ini
 enabled=1        # 0 = off for this game
-sharpness=0.50   # 0.0 (soft) .. 1.0 (strong)
+sharpness=0.50   # 0.0 (off) .. 1.0 (strong)
+antialias=0.50   # 0.0 (off) .. 1.0 (strong)
 split=0          # 1 = left half only (comparison)
 flip=auto        # auto / on / off
 ```
 
-The frame copy memory is reserved at game start only when the effect is enabled, so turning it
-on for a game that was started with it off needs a restart of the game.
+Everything is off by default. The frame copy memory (about 10 MB) is reserved at game start only
+when the effect is enabled for that game, so the first time you turn it on in the overlay the game
+has to be restarted once. After that it can be changed freely while playing.
 To turn the effect off for all games, create an empty `sdmc:/config/fsrSwitch/disabled.flag`.
 
 A start-up log is written per game to `sdmc:/config/fsrSwitch/log_<TITLEID>.txt`. Frame size,

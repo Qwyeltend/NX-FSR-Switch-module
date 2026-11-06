@@ -163,7 +163,7 @@ jobs:
           cp /tmp/overlay/nx-fsr.ovl switch/.overlays/nx-fsr.ovl
           cp $GITHUB_WORKSPACE/package/README_TEST.txt ./README_fsrSwitch.txt
           SHORT=$(echo $GITHUB_SHA | cut -c1-7)
-          NAME=NX-FSR-0.2.0-$SHORT
+          NAME=NX-FSR-0.3.0-$SHORT
           zip -q -r /tmp/$NAME.zip .
           mkdir -p /tmp/builds && cp /tmp/$NAME.zip /tmp/builds/
           echo "NAME=$NAME" >> $GITHUB_ENV

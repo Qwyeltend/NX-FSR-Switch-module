@@ -40,11 +40,12 @@ namespace FsrNVN {
 
 		// ------------------------------------------------------------------ settings
 		constexpr const char* CONFIG_DIR = "sdmc:/config/fsrSwitch";
-		constexpr const char* BUILD_TAG = "NX-FSR 0.2";
+		constexpr const char* BUILD_TAG = "NX-FSR 0.3";
 
 		struct Config {
-			bool enabled = true;
-			int sharpness = 500;   // 0..1000 (shader gets 0.0..1.0)
+			bool enabled = false;  // off until turned on in the overlay (or the .ini)
+			int sharpness = 500;   // 0..1000 (shader gets 0.0..1.0), 0 = no sharpening
+			int antialias = 0;     // 0..1000, 0 = no anti-aliasing
 			bool split = false;    // comparison: effect only on the left half, line in the middle
 			int flip = FSR_FLIP_AUTO;
 		};
@@ -63,6 +64,11 @@ namespace FsrNVN {
 		int SettingSharpness() {
 			if (!shared) return cfg.sharpness;
 			uint32_t v = shared->sharpness;
+			return v > 1000 ? 1000 : (int)v;
+		}
+		int SettingAntialias() {
+			if (!shared) return cfg.antialias;
+			uint32_t v = shared->antialias;
 			return v > 1000 ? 1000 : (int)v;
 		}
 		bool SettingSplit() { return shared ? shared->split != 0 : cfg.split; }
@@ -143,6 +149,7 @@ namespace FsrNVN {
 					while (*value == ' ' || *value == '\t') value++;
 					if (!strcmp(key, "enabled")) cfg.enabled = (*value == '1' || *value == 'y' || *value == 'Y' || *value == 't');
 					else if (!strcmp(key, "sharpness")) cfg.sharpness = ParseMilli(value);
+					else if (!strcmp(key, "antialias")) cfg.antialias = ParseMilli(value);
 					else if (!strcmp(key, "split")) cfg.split = (*value == '1' || *value == 'y' || *value == 'Y' || *value == 't');
 					else if (!strcmp(key, "flip")) {
 						if (*value == 'a' || *value == 'A') cfg.flip = FSR_FLIP_AUTO;
@@ -161,24 +168,6 @@ namespace FsrNVN {
 			SaltySDCore_fclose(f);
 			buf[n] = 0;
 			return true;
-		}
-
-		void WriteDefaultConfig(const char* path) {
-			EnsureDir();
-			FILE* f = SaltySDCore_fopen(path, "wb");
-			if (!f) return;
-			static const char text[] =
-				"# fsrSwitch settings for this game\n"
-				"# enabled: 1 = on, 0 = off\n"
-				"enabled=1\n"
-				"# sharpness: 0.0 (soft) .. 1.0 (strong)\n"
-				"sharpness=0.50\n"
-				"# split: 1 = effect only on the left half (for comparing), 0 = whole screen\n"
-				"split=0\n"
-				"# flip: auto (follow the game), on, off. Use on/off if the picture is upside down\n"
-				"flip=auto\n";
-			SaltySDCore_fwrite(text, 1, sizeof(text) - 1, f);
-			SaltySDCore_fclose(f);
 		}
 
 		// ------------------------------------------------------------------ NVN functions
@@ -348,7 +337,7 @@ namespace FsrNVN {
 
 		struct Params {
 			float crop[4];    // x, y, width, height
-			float effect[4];  // sharpness, split, 0, 0
+			float effect[4];  // sharpness, split, flip rows, anti-aliasing
 		};
 		static_assert(sizeof(Params) == 32, "Params must match the std140 layout of the GLSL block");
 
@@ -449,7 +438,7 @@ namespace FsrNVN {
 			SamplerBuilder sb{};
 			nvn.SamplerBuilderSetDefaults(&sb);
 			nvn.SamplerBuilderSetDevice(&sb, device);
-			nvn.SamplerBuilderSetMinMagFilter(&sb, 0, 0);
+			nvn.SamplerBuilderSetMinMagFilter(&sb, 1, 1); // linear: FXAA samples between texels
 			nvn.SamplerBuilderSetWrapMode(&sb, 0, 0, 0);
 			if (!nvn.SamplerInitialize(&sourceSampler, &sb)) return false;
 			if (!nvn.SamplerPoolInitialize(&samplerPool, &resPool, (ptrdiff_t)SAMPLER_POOL_OFFSET, reservedSamplerDescriptors + 1)) return false;
@@ -614,6 +603,7 @@ namespace FsrNVN {
 			params.effect[0] = (float)SettingSharpness() / 1000.0f;
 			params.effect[1] = SettingSplit() ? 1.0f : 0.0f;
 			params.effect[2] = flipRows ? 1.0f : 0.0f;
+			params.effect[3] = (float)SettingAntialias() / 1000.0f;
 			memcpy(resCpu + UBO_POOL_OFFSET + (size_t)slot * uboStride, &params, sizeof(params));
 			const BufferAddress paramsAddress = resGpu + UBO_POOL_OFFSET + (BufferAddress)slot * uboStride;
 
@@ -691,6 +681,7 @@ namespace FsrNVN {
 
 	void Process(Device* device, const Queue* queue, const Texture* target, const Rectangle& crop, Resolver resolve) {
 		if (!Wanted() || !SettingEnabled() || !device || !queue || !target) return;
+		if (SettingSharpness() == 0 && SettingAntialias() == 0) return; // nothing to do
 		RunArgs args{device, queue, target, &crop, resolve};
 #if defined(__aarch64__)
 		const bool ok = fsr_nvn_call_on_stack(RunTrampoline, &args, runStack + sizeof(runStack)) != 0;
@@ -722,15 +713,14 @@ extern "C" void FsrSwitch_Init(SharedMemory* sharedMemory) {
 		return;
 	}
 	npf_snprintf(path, sizeof(path), "%s/%016lX.ini", CONFIG_DIR, (unsigned long)titleId);
-	if (ReadFile(path, text, sizeof(text))) {
+	const bool haveConfig = ReadFile(path, text, sizeof(text));
+	if (haveConfig) {
 		ParseConfig(text);
 		Log("config: %s\n", path);
 	}
-	else {
-		WriteDefaultConfig(path);
-		Log("config: none, defaults used and written to %s\n", path);
-	}
-	Log("settings: enabled %d, sharpness %d/1000, split %d, flip %d\n", cfg.enabled ? 1 : 0, cfg.sharpness, cfg.split ? 1 : 0, cfg.flip);
+	else Log("config: none (off; turn it on in the overlay)\n");
+	Log("settings: enabled %d, sharpness %d/1000, anti-aliasing %d/1000, split %d, flip %d\n",
+	    cfg.enabled ? 1 : 0, cfg.sharpness, cfg.antialias, cfg.split ? 1 : 0, cfg.flip);
 
 	// Live settings / status block for the overlay.
 	ptrdiff_t offset = 0;
@@ -743,6 +733,7 @@ extern "C" void FsrSwitch_Init(SharedMemory* sharedMemory) {
 		shared->sharpness = (uint32_t)cfg.sharpness;
 		shared->split = cfg.split ? 1 : 0;
 		shared->flip = (uint32_t)cfg.flip;
+		shared->antialias = (uint32_t)cfg.antialias;
 		shared->state = FSR_STATE_WAITING;
 		shared->width = 0;
 		shared->height = 0;
@@ -764,6 +755,7 @@ extern "C" void FsrSwitch_Init(SharedMemory* sharedMemory) {
 	}
 	if (!copyMemory) SetState(FSR_STATE_NO_MEMORY);
 	Log("waiting for the game's first NVN frame (frame info and GPU time are shown in the overlay)\n");
-	FlushLog();
+	// Games never set up in the overlay leave nothing on the SD card.
+	if (haveConfig) FlushLog();
 	ipcOpen = false;
 }

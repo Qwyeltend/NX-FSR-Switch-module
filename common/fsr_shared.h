@@ -6,7 +6,7 @@
 // and checks the title ID. All fields are 32-bit so the block works at any 4-byte aligned offset.
 
 #define FSR_SHARED_MAGIC   0x58525346u  /* "FSRX" */
-#define FSR_SHARED_VERSION 1u
+#define FSR_SHARED_VERSION 2u
 
 enum FsrFlip {
     FSR_FLIP_AUTO = 0,   // follow the game's NVN window origin mode
@@ -18,7 +18,7 @@ enum FsrState {
     FSR_STATE_WAITING = 0,     // waiting for the first NVN frame
     FSR_STATE_RUNNING = 1,
     FSR_STATE_FAILED = 2,      // init failed, see sdmc:/config/fsrSwitch/log_<titleid>.txt
-    FSR_STATE_NO_MEMORY = 3,   // effect was off at game start: restart the game to enable it
+    FSR_STATE_NO_MEMORY = 3,   // effect was off at game start: restart the game to use it
 };
 
 typedef struct {
@@ -32,6 +32,7 @@ typedef struct {
     uint32_t sharpness;    // 0..1000
     uint32_t split;        // 0/1, effect only on the left half
     uint32_t flip;         // FsrFlip
+    uint32_t antialias;    // 0..1000, 0 = off
 
     // Status: written by Core.
     uint32_t state;        // FsrState
