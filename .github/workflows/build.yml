@@ -14,6 +14,8 @@ on:
       - "core/**"
       - "tools/**"
       - "package/**"
+      - "overlay/**"
+      - "common/**"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -109,8 +111,28 @@ jobs:
           name: saltynx-core
           path: /tmp/saltynx/saltysd_core/saltynx_core.elf
 
+  overlay:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get libtesla (from FPSLocker)
+        run: git clone --depth 1 https://github.com/masagrator/FPSLocker.git /tmp/fpslocker
+
+      - name: Build overlay
+        run: |
+          cd overlay
+          make -j4 FPSLOCKER=/tmp/fpslocker
+          ls -la nx-fsr.ovl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overlay
+          path: overlay/nx-fsr.ovl
+
   package:
-    needs: core
+    needs: [core, overlay]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,6 +141,11 @@ jobs:
         with:
           name: saltynx-core
           path: /tmp/core
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: overlay
+          path: /tmp/overlay
 
       - name: Official SaltyNX release + our Core
         env:
@@ -132,10 +159,11 @@ jobs:
           find . -maxdepth 3 | sort
           test -f SaltySD/saltynx_core.elf
           cp /tmp/core/saltynx_core.elf SaltySD/saltynx_core.elf
-          mkdir -p config/fsrSwitch
+          mkdir -p switch/.overlays
+          cp /tmp/overlay/nx-fsr.ovl switch/.overlays/nx-fsr.ovl
           cp $GITHUB_WORKSPACE/package/README_TEST.txt ./README_fsrSwitch.txt
           SHORT=$(echo $GITHUB_SHA | cut -c1-7)
-          NAME=fsrSwitch-diag-$SHORT
+          NAME=NX-FSR-0.2.0-$SHORT
           zip -q -r /tmp/$NAME.zip .
           mkdir -p /tmp/builds && cp /tmp/$NAME.zip /tmp/builds/
           echo "NAME=$NAME" >> $GITHUB_ENV

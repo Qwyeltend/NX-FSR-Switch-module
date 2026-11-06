@@ -5,13 +5,15 @@ Per-game post-processing for retail Nintendo Switch games: **contrast adaptive s
 without extra frame buffering.
 
 > [!WARNING]
-> **Experimental.** This is an early diagnostic build, not tested on many games yet.
+> **Experimental.** Early version, tested on few games so far.
 > It may crash games. Keep a backup of your `SaltySD` folder.
 
 ## Features
 
 - AMD FidelityFX CAS sharpening of the final frame
 - Settings per game (title ID), applied automatically when the game starts
+- Tesla / Ultrahand overlay: change settings in game, live, saved per game
+- Handles games whose frame is stored bottom-up (NVN lower-left origin), with a manual override
 - No added input lag: the pass runs inside the same frame, right before present (it only costs GPU time)
 - Split view for comparing (effect on the left half only)
 - One build for all 64-bit NVN games, no per-game code
@@ -19,7 +21,6 @@ without extra frame buffering.
 ### Planned
 
 - Post-process anti-aliasing (FXAA, SMAA) and combining it with sharpening
-- Ultrahand / Tesla overlay for changing settings in game
 - Optional per-game FSR 1.0 (EASU + RCAS) where the frame can be taken before the game's own upscale
 
 ## Requirements
@@ -72,20 +73,32 @@ anything else.
 
 ## Configuration
 
-Per-game settings live in `sdmc:/config/fsrSwitch/<TITLEID>.ini` (created with defaults on the
-first launch of a game):
+Open the overlay (Tesla / Ultrahand) while a game is running:
+
+| Setting | |
+|---|---|
+| Effect | on / off for this game |
+| Sharpness | 0 – 100 % |
+| Compare | effect on the left half only, line in the middle |
+| Picture flip | Auto / Off / On, for games where the picture ends up upside down |
+
+Changes apply immediately and are saved to `sdmc:/config/fsrSwitch/<TITLEID>.ini`, which is read
+at the next start of that game. The file can also be edited by hand:
 
 ```ini
 enabled=1        # 0 = off for this game
 sharpness=0.50   # 0.0 (soft) .. 1.0 (strong)
-split=1          # 1 = left half only (comparison), 0 = whole screen
+split=0          # 1 = left half only (comparison)
+flip=auto        # auto / on / off
 ```
 
-Changes apply on the next launch of the game.
+The frame copy memory is reserved at game start only when the effect is enabled, so turning it
+on for a game that was started with it off needs a restart of the game.
 To turn the effect off for all games, create an empty `sdmc:/config/fsrSwitch/disabled.flag`.
 
-A log is written per game to `sdmc:/config/fsrSwitch/log_<TITLEID>.txt` (initialisation steps,
-frame size and format, GPU time of the pass).
+A start-up log is written per game to `sdmc:/config/fsrSwitch/log_<TITLEID>.txt`. Frame size,
+frame origin and GPU time of the pass are shown live in the overlay (SaltyNX Core can only access
+the SD card while the game is starting).
 
 ## Building
 
@@ -93,11 +106,14 @@ Everything is built by GitHub Actions (`.github/workflows/build.yml`):
 
 1. **shaders** — builds UAM and envydis, compiles `shaders/`, converts to NVN, checks bindings
 2. **core** — SaltyNX 2.1.4 Core with the module applied by `tools/apply_patch.py` (devkitA64)
-3. **package** — the official SaltyNX 2.1.4 release with the Core replaced
+3. **overlay** — Tesla overlay (libtesla)
+4. **package** — the official SaltyNX 2.1.4 release with the Core replaced, plus the overlay
 
 ```
 shaders/        GLSL sources (full screen vertex shader, CAS fragment shader)
 core/           FsrNVN module (added to SaltyNX Core)
+overlay/        Tesla / Ultrahand overlay
+common/         shared memory block used by Core and the overlay
 tools/          UAM -> NVN converter, binding checker, SaltyNX patcher
 lab/            research: UAM vs NVN shader comparison
 package/        files added to the release package
@@ -105,7 +121,9 @@ package/        files added to the release package
 
 ## Credits
 
-- [masagrator](https://github.com/masagrator) — SaltyNX, whose NVN hooks and logo renderer this builds on
+- [masagrator](https://github.com/masagrator) — SaltyNX, whose NVN hooks and logo renderer this builds on;
+  FPSLocker, whose SaltyNX IPC client and libtesla copy the overlay uses
+- [WerWolv](https://github.com/WerWolv/libtesla) — libtesla
 - [fincs / devkitPro](https://github.com/devkitPro/uam) — UAM shader compiler
 - [envytools](https://github.com/envytools/envytools) — envydis Maxwell disassembler
 - AMD — FidelityFX Contrast Adaptive Sharpening (MIT)

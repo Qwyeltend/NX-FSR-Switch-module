@@ -1,4 +1,5 @@
 #include "FsrNVN.hpp"
+#include "fsr_shared.h"
 #include <cstdarg>
 #include <cstddef>
 #include <cstring>
@@ -39,16 +40,34 @@ namespace FsrNVN {
 
 		// ------------------------------------------------------------------ settings
 		constexpr const char* CONFIG_DIR = "sdmc:/config/fsrSwitch";
-		constexpr const char* BUILD_TAG = "fsrSwitch diag-1";
+		constexpr const char* BUILD_TAG = "NX-FSR 0.2";
 
 		struct Config {
 			bool enabled = true;
 			int sharpness = 500;   // 0..1000 (shader gets 0.0..1.0)
-			bool split = true;     // diagnostic: effect only on the left half, line in the middle
+			bool split = false;    // comparison: effect only on the left half, line in the middle
+			int flip = FSR_FLIP_AUTO;
 		};
 		Config cfg{};
 		bool globallyDisabled = false;
 		uint64_t titleId = 0;
+
+		// Live settings and status, shared with the overlay (nullptr when SaltyNX had no room for it).
+		volatile FsrSharedBlock* shared = nullptr;
+		int originMode = -1;   // NVN window origin mode of the game, -1 = unknown
+
+		// SD card access goes through SaltyNX's sysmodule, only possible during FsrSwitch_Init.
+		bool ipcOpen = false;
+
+		bool SettingEnabled() { return shared ? shared->enabled != 0 : cfg.enabled; }
+		int SettingSharpness() {
+			if (!shared) return cfg.sharpness;
+			uint32_t v = shared->sharpness;
+			return v > 1000 ? 1000 : (int)v;
+		}
+		bool SettingSplit() { return shared ? shared->split != 0 : cfg.split; }
+		int SettingFlip() { return shared ? (int)shared->flip : cfg.flip; }
+		void SetState(uint32_t state) { if (shared) shared->state = state; }
 
 		// Frame copy memory, reserved at game start (before the game takes all memory).
 		constexpr size_t COPY_MEMORY_WANTED = (size_t)1920 * 1152 * 4 + 0x40000;
@@ -80,7 +99,7 @@ namespace FsrNVN {
 		}
 
 		void FlushLog() {
-			if (!logDirty) return;
+			if (!logDirty || !ipcOpen) return;
 			EnsureDir();
 			char path[96];
 			npf_snprintf(path, sizeof(path), "%s/log_%016lX.txt", CONFIG_DIR, (unsigned long)titleId);
@@ -125,6 +144,11 @@ namespace FsrNVN {
 					if (!strcmp(key, "enabled")) cfg.enabled = (*value == '1' || *value == 'y' || *value == 'Y' || *value == 't');
 					else if (!strcmp(key, "sharpness")) cfg.sharpness = ParseMilli(value);
 					else if (!strcmp(key, "split")) cfg.split = (*value == '1' || *value == 'y' || *value == 'Y' || *value == 't');
+					else if (!strcmp(key, "flip")) {
+						if (*value == 'a' || *value == 'A') cfg.flip = FSR_FLIP_AUTO;
+						else if (*value == '1' || (*value == 'o' && value[1] == 'n') || (*value == 'O' && value[1] == 'N')) cfg.flip = FSR_FLIP_ON;
+						else cfg.flip = FSR_FLIP_OFF;
+					}
 				}
 				line = next;
 			}
@@ -150,7 +174,9 @@ namespace FsrNVN {
 				"# sharpness: 0.0 (soft) .. 1.0 (strong)\n"
 				"sharpness=0.50\n"
 				"# split: 1 = effect only on the left half (for comparing), 0 = whole screen\n"
-				"split=1\n";
+				"split=0\n"
+				"# flip: auto (follow the game), on, off. Use on/off if the picture is upside down\n"
+				"flip=auto\n";
 			SaltySDCore_fwrite(text, 1, sizeof(text) - 1, f);
 			SaltySDCore_fclose(f);
 		}
@@ -379,7 +405,7 @@ namespace FsrNVN {
 		int currentSlot = 0;
 		uint64_t frames = 0;
 		bool slotUsed[SLOTS]{};
-		uint64_t gpuNsSum = 0, gpuSamples = 0, cpuTickSum = 0;
+		uint64_t gpuNsAvg = 0;
 
 		bool initPool(MemoryPool* pool, Device* device, int flags, void* storage, size_t size) {
 			MemoryPoolBuilder b{};
@@ -539,44 +565,34 @@ namespace FsrNVN {
 				e = DeviceGetTimestampInNanoseconds(device, end);
 			}
 			if (e > b && e - b < 100000000ull) { // ignore garbage (> 100 ms)
-				gpuNsSum += e - b;
-				gpuSamples++;
+				// Moving average, shown by the overlay.
+				gpuNsAvg = gpuNsAvg ? (gpuNsAvg * 15 + (e - b)) / 16 : (e - b);
+				if (shared) shared->gpuTimeNs = (uint32_t)gpuNsAvg;
 			}
 		}
 
-		void logTiming(const char* when) {
-			// GPU time of our pass (copy + sharpen), average over the measured frames.
-			const uint64_t avg = gpuSamples ? gpuNsSum / gpuSamples : 0;
-			const uint64_t cpuUs = frames ? (cpuTickSum * 1000000ull / 19200000ull) / frames : 0;
-			if (DeviceGetTimestampInNanoseconds)
-				Log("%s: frames %lu, GPU per frame %lu.%02lu ms (%lu samples), CPU per frame %lu us\n", when,
-				    (unsigned long)frames, (unsigned long)(avg / 1000000), (unsigned long)(avg / 10000 % 100),
-				    (unsigned long)gpuSamples, (unsigned long)cpuUs);
-			else
-				Log("%s: frames %lu, GPU per frame %lu raw ticks (%lu samples), CPU per frame %lu us\n", when,
-				    (unsigned long)frames, (unsigned long)avg, (unsigned long)gpuSamples, (unsigned long)cpuUs);
-			FlushLog();
+		bool FlipRows() {
+			const int flip = SettingFlip();
+			if (flip == FSR_FLIP_ON) return true;
+			if (flip == FSR_FLIP_OFF) return false;
+			return originMode == 0; // NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT: rows run bottom to top
 		}
 
 		bool Run(Device* device, const Queue* queue, const Texture* target, const Rectangle& crop, Resolver resolve) {
-			const uint64_t startTick = armGetSystemTick();
 			if (!init(device, resolve)) return false;
 
 			const int width = nvn.TextureGetWidth(target);
 			const int height = nvn.TextureGetHeight(target);
 			const int format = nvn.TextureGetFormat(target);
 			if (width <= 0 || height <= 0) return true;
-			if (!prepareCopyTexture(device, width, height, format)) {
-				Log("copy texture: FAILED\n");
-				FlushLog();
-				return false;
-			}
+			if (!prepareCopyTexture(device, width, height, format)) return false;
 
 			const bool haveCrop = crop.width > 0 && crop.height > 0;
 			const int visibleW = haveCrop ? crop.width : width;
 			const int visibleH = haveCrop ? crop.height : height;
 			const int originX = haveCrop ? crop.x : 0;
 			const int originY = haveCrop ? crop.y : 0;
+			const bool flipRows = FlipRows();
 
 			const int slot = currentSlot;
 			currentSlot = (currentSlot + 1) % SLOTS;
@@ -595,8 +611,9 @@ namespace FsrNVN {
 			params.crop[1] = (float)originY;
 			params.crop[2] = (float)visibleW;
 			params.crop[3] = (float)visibleH;
-			params.effect[0] = (float)cfg.sharpness / 1000.0f;
-			params.effect[1] = cfg.split ? 1.0f : 0.0f;
+			params.effect[0] = (float)SettingSharpness() / 1000.0f;
+			params.effect[1] = SettingSplit() ? 1.0f : 0.0f;
+			params.effect[2] = flipRows ? 1.0f : 0.0f;
 			memcpy(resCpu + UBO_POOL_OFFSET + (size_t)slot * uboStride, &params, sizeof(params));
 			const BufferAddress paramsAddress = resGpu + UBO_POOL_OFFSET + (BufferAddress)slot * uboStride;
 
@@ -633,14 +650,15 @@ namespace FsrNVN {
 			slotUsed[slot] = true;
 
 			frames++;
-			cpuTickSum += armGetSystemTick() - startTick;
-			if (frames == 1) {
-				Log("first frame: texture %dx%d format %d, crop %d,%d %dx%d, sharpness %d/1000, split %d\n",
-				    width, height, format, crop.x, crop.y, crop.width, crop.height, cfg.sharpness, cfg.split ? 1 : 0);
-				FlushLog();
+			if (shared) {
+				shared->state = FSR_STATE_RUNNING;
+				shared->width = (uint32_t)width;
+				shared->height = (uint32_t)height;
+				shared->format = (uint32_t)format;
+				shared->originMode = (uint32_t)originMode;
+				shared->flipActive = flipRows ? 1 : 0;
+				shared->frames = (uint32_t)frames;
 			}
-			else if (frames == 300) logTiming("after 300 frames");
-			else if (frames == 3600) logTiming("after 3600 frames");
 			return true;
 		}
 
@@ -655,16 +673,24 @@ namespace FsrNVN {
 	}
 
 	bool Wanted() {
-		return !globallyDisabled && cfg.enabled && copyMemory != 0 && !failed;
+		return !globallyDisabled && copyMemory != 0 && !failed;
 	}
 
-	void PrepareEarly(Device* device, Resolver resolve) {
-		if (!Wanted() || initAttempted || shaderPoolReady || !device) return;
-		if (loadFunctions(resolve)) createShaderPool(device);
+	void PrepareEarly(Device* device, const DeviceBuilder* builder, Resolver resolve) {
+		if (!Wanted() || initAttempted || !device) return;
+		// Where the game's frame starts in memory (upper or lower left), see FlipRows().
+		int (*DeviceGetWindowOriginMode)(const Device*) = nullptr;
+		int (*DeviceBuilderGetWindowOriginMode)(const DeviceBuilder*) = nullptr;
+		loadOptional(DeviceGetWindowOriginMode, resolve, "nvnDeviceGetWindowOriginMode");
+		loadOptional(DeviceBuilderGetWindowOriginMode, resolve, "nvnDeviceBuilderGetWindowOriginMode");
+		if (DeviceGetWindowOriginMode) originMode = DeviceGetWindowOriginMode(device);
+		else if (DeviceBuilderGetWindowOriginMode && builder) originMode = DeviceBuilderGetWindowOriginMode(builder);
+		if (shared) shared->originMode = (uint32_t)originMode;
+		if (!shaderPoolReady && loadFunctions(resolve)) createShaderPool(device);
 	}
 
 	void Process(Device* device, const Queue* queue, const Texture* target, const Rectangle& crop, Resolver resolve) {
-		if (!Wanted() || !device || !queue || !target) return;
+		if (!Wanted() || !SettingEnabled() || !device || !queue || !target) return;
 		RunArgs args{device, queue, target, &crop, resolve};
 #if defined(__aarch64__)
 		const bool ok = fsr_nvn_call_on_stack(RunTrampoline, &args, runStack + sizeof(runStack)) != 0;
@@ -673,14 +699,14 @@ namespace FsrNVN {
 #endif
 		if (!ok) {
 			failed = true;
-			Log("effect disabled for this session\n");
-			FlushLog();
+			SetState(FSR_STATE_FAILED);
 		}
 	}
 }
 
-extern "C" void FsrSwitch_Init(void) {
+extern "C" void FsrSwitch_Init(SharedMemory* sharedMemory) {
 	using namespace FsrNVN;
+	ipcOpen = true;
 	svcGetInfo(&titleId, InfoType_ProgramId, CUR_PROCESS_HANDLE, 0);
 	Log("%s, SaltyNX Core " APP_VERSION ", title %016lX\n", BUILD_TAG, (unsigned long)titleId);
 
@@ -690,8 +716,9 @@ extern "C" void FsrSwitch_Init(void) {
 	if (FILE* f = SaltySDCore_fopen(path, "rb")) {
 		SaltySDCore_fclose(f);
 		globallyDisabled = true;
-		Log("disabled.flag found: fsrSwitch is off for all games\n");
+		Log("disabled.flag found: off for all games\n");
 		FlushLog();
+		ipcOpen = false;
 		return;
 	}
 	npf_snprintf(path, sizeof(path), "%s/%016lX.ini", CONFIG_DIR, (unsigned long)titleId);
@@ -703,7 +730,31 @@ extern "C" void FsrSwitch_Init(void) {
 		WriteDefaultConfig(path);
 		Log("config: none, defaults used and written to %s\n", path);
 	}
-	Log("settings: enabled %d, sharpness %d/1000, split %d\n", cfg.enabled ? 1 : 0, cfg.sharpness, cfg.split ? 1 : 0);
+	Log("settings: enabled %d, sharpness %d/1000, split %d, flip %d\n", cfg.enabled ? 1 : 0, cfg.sharpness, cfg.split ? 1 : 0, cfg.flip);
+
+	// Live settings / status block for the overlay.
+	ptrdiff_t offset = 0;
+	if (sharedMemory && !SaltySD_CheckIfSharedMemoryAvailable(&offset, sizeof(FsrSharedBlock))) {
+		shared = (volatile FsrSharedBlock*)((uintptr_t)shmemGetAddr(sharedMemory) + offset);
+		shared->version = FSR_SHARED_VERSION;
+		shared->titleIdLow = (uint32_t)titleId;
+		shared->titleIdHigh = (uint32_t)(titleId >> 32);
+		shared->enabled = cfg.enabled ? 1 : 0;
+		shared->sharpness = (uint32_t)cfg.sharpness;
+		shared->split = cfg.split ? 1 : 0;
+		shared->flip = (uint32_t)cfg.flip;
+		shared->state = FSR_STATE_WAITING;
+		shared->width = 0;
+		shared->height = 0;
+		shared->format = 0;
+		shared->originMode = 0xFFFFFFFFu;
+		shared->flipActive = 0;
+		shared->gpuTimeNs = 0;
+		shared->frames = 0;
+		shared->magic = FSR_SHARED_MAGIC;
+		Log("shared memory: block at offset 0x%lx\n", (unsigned long)offset);
+	}
+	else Log("shared memory: no room, overlay can't change settings in game\n");
 
 	if (cfg.enabled) {
 		copyMemory = SaltySDCore_ReserveMemoryAppend(COPY_MEMORY_WANTED);
@@ -711,6 +762,8 @@ extern "C" void FsrSwitch_Init(void) {
 		if (copyMemory) Log("memory: reserved 0x%lx bytes for frame copy\n", (unsigned long)copyMemorySize);
 		else Log("memory: reservation FAILED, effect off\n");
 	}
-	Log("waiting for the game's first NVN frame... (no more lines = game doesn't draw through NVN)\n");
+	if (!copyMemory) SetState(FSR_STATE_NO_MEMORY);
+	Log("waiting for the game's first NVN frame (frame info and GPU time are shown in the overlay)\n");
 	FlushLog();
+	ipcOpen = false;
 }

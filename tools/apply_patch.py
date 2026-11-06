@@ -26,6 +26,7 @@ def main():
 
     for name in ("FsrNVN.hpp", "FsrNVN.cpp"):
         shutil.copy(repo / "core" / name, api / name)
+    shutil.copy(repo / "common" / "fsr_shared.h", api / "fsr_shared.h")
 
     nvn = api / "NVN.cpp"
     replace_once(nvn, '#include "LogoNVN.hpp"\n', '#include "LogoNVN.hpp"\n#include "FsrNVN.hpp"\n')
@@ -34,7 +35,7 @@ def main():
     replace_once(nvn,
         "if (ret && nvnDevice == mainDevice && !Logo::done) LogoNVN::PrepareEarly(nvnDevice, Logo::Resolve);\n",
         "if (ret && nvnDevice == mainDevice && !Logo::done) LogoNVN::PrepareEarly(nvnDevice, Logo::Resolve);\n"
-        "\t\tif (ret && nvnDevice == mainDevice) FsrNVN::PrepareEarly(nvnDevice, Logo::Resolve);\n")
+        "\t\tif (ret && nvnDevice == mainDevice) FsrNVN::PrepareEarly(nvnDevice, nvnDeviceBuilder, Logo::Resolve);\n")
 
     # Effect right before present (before the logo, so the logo is drawn on top of the processed frame).
     replace_once(nvn,
@@ -72,13 +73,13 @@ def main():
         "\tif (!reserved_area_addr) reserved_area_addr = g_heapAddr + getElfAreaAligned();\n"
         "\treturn reserved_area_addr + offset;\n"
         "}\n\n"
-        "void FsrSwitch_Init(void);\n\n"
+        "void FsrSwitch_Init(SharedMemory* sharedMemory);\n\n"
         "uintptr_t SaltySDCore_GetReservedMemory(size_t* size)\n")
     replace_once(main_c,
         "\t\t\tNX_FPS(&_sharedmemory, &sharedOperationMode);\n",
         "\t\t\tNX_FPS(&_sharedmemory, &sharedOperationMode);\n"
         "\t\t\t#if !defined(SWITCH32) && !defined(OUNCE32)\n"
-        "\t\t\tFsrSwitch_Init();\n"
+        "\t\t\tFsrSwitch_Init(&_sharedmemory);\n"
         "\t\t\t#endif\n")
     print("fsrSwitch patch applied")
 
